@@ -412,11 +412,15 @@ fn serialize_keys_range<K: DictionaryKey>(
         (nested::num_values(nested), nested[0].len())
     };
 
+    let null_count = validity.as_ref().map_or(0, Bitmap::unset_bits);
+    // Like `nested::num_nulls`, but with the normalized validity.
+    let num_nulls = num_values - (array.len() - null_count);
+
     utils::build_plain_page(
         buffer,
         num_values,
         num_rows,
-        array.null_count(),
+        num_nulls,
         repetition_levels_byte_length,
         definition_levels_byte_length,
         statistics,

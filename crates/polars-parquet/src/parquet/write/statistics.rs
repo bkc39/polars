@@ -25,6 +25,10 @@ fn reduce_vec8(lhs: Option<Vec<u8>>, rhs: &Option<Vec<u8>>, max: bool) -> Option
     }
 }
 
+/// Merges the statistics of the pages of a column chunk.
+///
+/// A page without min/max has no non-null values or only NaN values, which the bounds leave out.
+/// Otherwise, min/max are turned off for the whole column. So the merge can skip such a page.
 pub fn reduce(stats: &[&Option<Statistics>]) -> ParquetResult<Option<Statistics>> {
     if stats.is_empty() {
         return Ok(None);
