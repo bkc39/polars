@@ -13,7 +13,7 @@ from polars.testing.parametric import dataframes, series
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from polars._typing import PolarsDataType
+    from polars._typing import EngineType, PolarsDataType
 
 
 @given(
@@ -1420,3 +1420,40 @@ def test_sort_scalar_broadcast_in_memory_28387() -> None:
 def test_sort_maintain_order_nested_keys_28586(key: pl.Series) -> None:
     df = pl.DataFrame({"k": key, "r": range(key.len())})
     assert_frame_equal(df.sort("k", maintain_order=True), df.sort(["k", "r"]))
+
+
+@pytest.mark.parametrize("engine", ["in-memory", "streaming"])
+@pytest.mark.parametrize(
+    "expr",
+    [
+        pl.col("x").sum(),
+        pl.col("x").max(),
+        pl.col("s").min(),
+        pl.col("x").filter(pl.col("x") > 3).sum(),
+        pl.len(),
+        pl.lit(1),
+    ],
+)
+def test_sort_scalar_in_group_30325(expr: pl.Expr, engine: EngineType) -> None:
+    # Unsorted keys give index groups, which the sort used to gather from.
+    lf = pl.LazyFrame(
+        {"g": [2, 1, 2, 3, 1, 2], "x": [3, 1, None, None, 4, 6], "s": list("cabedf")}
+    )
+
+    def queries(e: pl.Expr) -> list[pl.LazyFrame]:
+        return [
+            lf.group_by("g", maintain_order=True).agg(e.alias("r")),
+            lf.group_by("g", maintain_order=True).agg(
+                pl.when(pl.col("x") > 2).then(e).alias("r")
+            ),
+            lf.select(e.over("g").alias("r")),
+            lf.select(e.over("g", mapping_strategy="explode").alias("r")),
+        ]
+
+    for opts in (pl.QueryOptFlags(), pl.QueryOptFlags.none()):
+        for sorted_expr in (expr.sort(), expr.sort(descending=True, nulls_last=True)):
+            for q, expected in zip(queries(sorted_expr), queries(expr), strict=True):
+                assert_frame_equal(
+                    q.collect(engine=engine, optimizations=opts),
+                    expected.collect(engine=engine, optimizations=opts),
+                )
