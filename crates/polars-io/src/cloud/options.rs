@@ -303,9 +303,9 @@ pub(super) fn get_client_options() -> ClientOptions {
         ))
         .with_user_agent(HeaderValue::from_static(USER_AGENT))
         .with_allow_http(true)
-        .with_dns_resolver(Arc::new(
-            CachingResolver::new(DnsResolverConfig::from_env()),
-        ))
+    // .with_dns_resolver(Arc::new(
+    //     CachingResolver::new(DnsResolverConfig::from_env()),
+    // ))
 }
 
 #[cfg(feature = "aws")]
@@ -522,7 +522,8 @@ impl CloudOptions {
             .is_none()
         {
             // AWS default checksum, which is also more efficient than SHA256.
-            builder.with_checksum_algorithm(object_store::aws::Checksum::CRC64NVME)
+            // builder.with_checksum_algorithm(object_store::aws::Checksum::CRC64NVME)
+            builder
         } else {
             builder
         };
