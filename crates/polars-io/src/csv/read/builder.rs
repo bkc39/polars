@@ -17,7 +17,7 @@ use polars_utils::vec::PushUnchecked;
 
 use super::options::CsvEncoding;
 use super::parser::{could_be_whitespace_fast, skip_whitespace};
-use super::utils::escape_field;
+use super::utils::{escape_field, unquoted, unterminated, unterminated_field};
 
 pub(crate) trait PrimitiveParser: PolarsNumericType {
     fn parse(bytes: &[u8]) -> Option<Self::Native>;
@@ -138,7 +138,14 @@ where
         _time_unit: Option<TimeUnit>,
     ) -> PolarsResult<()> {
         if !bytes.is_empty() && needs_escaping {
-            bytes = &bytes[1..bytes.len() - 1];
+            match unquoted(bytes) {
+                Some(inner) => bytes = inner,
+                None if ignore_errors => {
+                    self.append_null();
+                    return Ok(());
+                },
+                None => return Err(unterminated_field(bytes)),
+            }
         }
 
         if !bytes.is_empty() && could_be_whitespace_fast(bytes[0]) {
@@ -217,7 +224,7 @@ impl ParsedBuilder for Utf8Field {
         let escaped_bytes = if needs_escaping {
             self.scratch.clear();
             self.scratch.reserve(bytes.len());
-            polars_ensure!(bytes.len() > 1 && bytes.last() == Some(&self.quote_char), ComputeError: "invalid csv file\n\nField `{}` is not properly escaped.", std::str::from_utf8(bytes).map_err(to_compute_err)?);
+            polars_ensure!(bytes.len() > 1 && bytes.last() == Some(&self.quote_char) && !unterminated(bytes), ComputeError: "invalid csv file\n\nField `{}` is not properly escaped.", std::str::from_utf8(bytes).map_err(to_compute_err)?);
 
             // SAFETY:
             // we just allocated enough capacity and data_len is correct.
@@ -302,7 +309,7 @@ impl<T: PolarsCategoricalType> CategoricalField<T> {
         }
         if validate_utf8(bytes) {
             if needs_escaping {
-                polars_ensure!(bytes.len() > 1, ComputeError: "invalid csv file\n\nField `{}` is not properly escaped.", std::str::from_utf8(bytes).map_err(to_compute_err)?);
+                polars_ensure!(bytes.len() > 1 && !unterminated(bytes), ComputeError: "invalid csv file\n\nField `{}` is not properly escaped.", std::str::from_utf8(bytes).map_err(to_compute_err)?);
                 self.escape_scratch.clear();
                 self.escape_scratch.reserve(bytes.len());
                 // SAFETY:
@@ -346,7 +353,14 @@ impl ParsedBuilder for BooleanChunkedBuilder {
         _time_unit: Option<TimeUnit>,
     ) -> PolarsResult<()> {
         let bytes = if needs_escaping {
-            &bytes[1..bytes.len() - 1]
+            match unquoted(bytes) {
+                Some(inner) => inner,
+                None if ignore_errors => {
+                    self.append_null();
+                    return Ok(());
+                },
+                None => return Err(unterminated_field(bytes)),
+            }
         } else {
             bytes
         };
@@ -405,7 +419,14 @@ impl ParsedBuilder for DecimalField {
         _time_unit: Option<TimeUnit>,
     ) -> PolarsResult<()> {
         if !bytes.is_empty() && needs_escaping {
-            bytes = &bytes[1..bytes.len() - 1];
+            match unquoted(bytes) {
+                Some(inner) => bytes = inner,
+                None if ignore_errors => {
+                    self.builder.append_null();
+                    return Ok(());
+                },
+                None => return Err(unterminated_field(bytes)),
+            }
         }
 
         if !bytes.is_empty() && could_be_whitespace_fast(bytes[0]) {
@@ -534,8 +555,15 @@ where
         _missing_is_null: bool,
         time_unit: Option<TimeUnit>,
     ) -> PolarsResult<()> {
-        if needs_escaping && bytes.len() >= 2 {
-            bytes = &bytes[1..bytes.len() - 1]
+        if needs_escaping {
+            match unquoted(bytes) {
+                Some(inner) => bytes = inner,
+                None if ignore_errors => {
+                    self.builder.append_null();
+                    return Ok(());
+                },
+                None => return Err(unterminated_field(bytes)),
+            }
         }
 
         if bytes.is_empty() {

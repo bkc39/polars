@@ -3,6 +3,8 @@
 use std::io::Read;
 use std::mem::MaybeUninit;
 
+use polars_error::{PolarsError, polars_err};
+
 use super::parser::next_line_position;
 #[cfg(feature = "decompress")]
 use super::parser::next_line_position_naive;
@@ -110,6 +112,32 @@ pub(crate) fn decompress(
             decompress_impl(&mut decoder, n_rows, separator, quote_char, eol_char)
         },
     }
+}
+
+/// Whether a field that opens with a quote ends inside it. The splitter toggles its quoted state
+/// on every quote byte and ends a field only outside a quote, so an odd count means the field ran
+/// to the end of the input unclosed (`"`, `"12`, `"ab""`, `"a"b"`).
+#[inline]
+pub(super) fn unterminated(bytes: &[u8]) -> bool {
+    let Some(&quote) = bytes.first() else {
+        return false;
+    };
+    bytes.iter().filter(|&&b| b == quote).count() % 2 == 1
+}
+
+/// The bytes between a quoted field's first and last byte, or `None` when the field is
+/// unterminated. A closed field with bytes after its closing quote gives what 0.55 sliced from
+/// it (`ab"` from `"ab"c`).
+#[inline]
+pub(super) fn unquoted(bytes: &[u8]) -> Option<&[u8]> {
+    match bytes {
+        [_, inner @ .., _] if !unterminated(bytes) => Some(inner),
+        _ => None,
+    }
+}
+
+pub(super) fn unterminated_field(bytes: &[u8]) -> PolarsError {
+    polars_err!(ComputeError: "invalid csv file\n\nField `{}` is not properly escaped.", String::from_utf8_lossy(bytes))
 }
 
 /// replace double quotes by single ones

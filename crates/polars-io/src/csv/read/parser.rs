@@ -14,6 +14,7 @@ use super::CsvParseOptions;
 use super::builder::Builder;
 use super::options::{CommentPrefix, NullValuesCompiled};
 use super::splitfields::SplitFields;
+use super::utils::{unquoted, unterminated};
 use crate::prelude::CsvReadOptions;
 use crate::prelude::streaming::read_until_start_and_infer_schema;
 use crate::utils::compression::ByteSourceReader;
@@ -1150,15 +1151,17 @@ pub(super) fn parse_lines(
 
                         // if we have null values argument, check if this field equal null value
                         if let Some(null_values) = null_values {
-                            let field = if needs_escaping && !field.is_empty() {
-                                unsafe { field.get_unchecked(1..field.len() - 1) }
+                            let field = if needs_escaping {
+                                unquoted(field)
                             } else {
-                                field
+                                Some(field)
                             };
 
                             // SAFETY:
                             // process fields is in bounds
-                            add_null = unsafe { null_values.is_null(field, idx as usize) }
+                            add_null = field.is_some_and(|field| unsafe {
+                                null_values.is_null(field, idx as usize)
+                            })
                         }
                         if add_null {
                             buf.add_null(!parse_options.missing_is_null && field.is_empty())
@@ -1168,6 +1171,21 @@ pub(super) fn parse_lines(
                                     let bytes_offset = offset + field.as_ptr() as usize - start;
                                     let unparsable = String::from_utf8_lossy(field);
                                     let column_name = schema.get_at_index(idx as usize).unwrap().0;
+                                    if needs_escaping && unterminated(field) {
+                                        return polars_err!(
+                                            ComputeError:
+                                            "could not parse `{}` as dtype `{}` at column '{}' (column number {})\n\n\
+                                            The current offset in the file is {} bytes.\n\
+                                            \n\
+                                            Original error: ```{}```",
+                                            &unparsable,
+                                            buf.dtype(),
+                                            column_name,
+                                            idx + 1,
+                                            bytes_offset,
+                                            e
+                                        );
+                                    }
                                     polars_err!(
                                         ComputeError:
                                         "could not parse `{}` as dtype `{}` at column '{}' (column number {})\n\n\
