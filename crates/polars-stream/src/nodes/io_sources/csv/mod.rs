@@ -46,6 +46,8 @@ const NO_SLICE: (usize, usize) = (0, usize::MAX);
 /// This is used if we finish the slice but still need a row count. It signals to the workers to
 /// go into line-counting mode where they can skip parsing the chunks.
 const SLICE_ENDED: (usize, usize) = (usize::MAX, 0);
+/// Parse the chunk and check its height against the line count, but emit no rows.
+const CHECK_ONLY: (usize, usize) = (0, 0);
 
 struct CsvFileReader {
     scan_source: ScanSource,
@@ -186,15 +188,6 @@ impl FileReader for CsvFileReader {
 
         match &pre_slice {
             Some(Slice::Negative { .. }) => unimplemented!(),
-
-            // We don't account for comments when slicing lines. We should never hit this panic -
-            // the FileReaderBuilder does not indicate PRE_SLICE support when we have a comment
-            // prefix.
-            Some(pre_slice)
-                if self.options.parse_options.comment_prefix.is_some() && pre_slice.len() > 0 =>
-            {
-                panic!("{pre_slice:?}")
-            },
 
             _ => {},
         }
@@ -365,11 +358,23 @@ impl FileReader for CsvFileReader {
                 let quote_char = options.parse_options.quote_char;
                 let eol_char = options.parse_options.eol_char;
                 let comment_prefix = options.parse_options.comment_prefix.clone();
+                let check_every_batch = comment_prefix.is_some() && !options.ignore_errors;
 
                 let line_counter = CountLines::new(quote_char, eol_char, comment_prefix);
 
+                let check_projection = if check_every_batch
+                    && needs_full_row_count
+                    && projection.is_empty()
+                    && !used_schema.is_empty()
+                {
+                    vec![0]
+                } else {
+                    projection.clone()
+                };
+
                 let chunk_reader_result =
-                    ChunkReader::try_new(options, used_schema, projection).map(Arc::new);
+                    ChunkReader::try_new(options, used_schema, projection, check_projection)
+                        .map(Arc::new);
                 _ = chunk_reader_tx.send(chunk_reader_result.clone());
 
                 match chunk_reader_result {
@@ -381,6 +386,7 @@ impl FileReader for CsvFileReader {
                             line_batch_tx,
                             pre_slice,
                             needs_full_row_count,
+                            check_every_batch,
                             use_async_prefetch,
                             verbose,
                         }
@@ -454,14 +460,18 @@ impl FileReader for CsvFileReader {
                         }
 
                         while let Ok(LineBatch {
-                            mem_slice: _,
+                            mem_slice,
                             n_lines,
                             slice,
-                            row_offset: _,
+                            row_offset,
                             morsel_seq: _,
                         }) = line_batch_rx.recv().await
                         {
-                            assert_eq!(slice, SLICE_ENDED);
+                            if slice == CHECK_ONLY {
+                                chunk_reader.read_chunk(&mem_slice, n_lines, slice, row_offset)?;
+                            } else {
+                                assert_eq!(slice, SLICE_ENDED);
+                            }
 
                             n_rows_processed = n_rows_processed.saturating_add(n_lines);
                         }

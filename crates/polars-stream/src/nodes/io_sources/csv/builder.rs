@@ -42,7 +42,9 @@ impl FileReaderBuilder for CsvReaderBuilder {
     fn reader_capabilities(&self) -> ReaderCapabilities {
         use ReaderCapabilities as RC;
 
-        if self.options.parse_options.comment_prefix.is_some() {
+        // With `ignore_errors` a batch whose parsed height differs from its counted lines is only
+        // a warning, so the slice cannot be cut by the line counter.
+        if self.options.parse_options.comment_prefix.is_some() && self.options.ignore_errors {
             RC::empty()
         } else {
             RC::PRE_SLICE
