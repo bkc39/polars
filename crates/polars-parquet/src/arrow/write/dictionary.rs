@@ -439,12 +439,11 @@ macro_rules! dyn_prim {
             primitive_encode_plain::<$from, $to>(values, EncodeNullability::new(false), vec![]);
 
         let stats: Option<ParquetStatistics> = if !$options.statistics.is_empty() {
-            let mut stats = primitive_build_statistics::<$from, $to>(
+            let stats = primitive_build_statistics::<$from, $to>(
                 values,
                 $type_.clone(),
                 &$options.statistics,
             );
-            stats.null_count = Some($array.null_count() as i64);
             Some(stats.serialize())
         } else {
             None
@@ -466,7 +465,7 @@ pub fn array_to_pages<K: DictionaryKey>(
     match encoding {
         Encoding::PlainDictionary | Encoding::RleDictionary => {
             // write DictPage
-            let (dict_page, mut statistics): (_, Option<ParquetStatistics>) = match array
+            let (dict_page, statistics): (_, Option<ParquetStatistics>) = match array
                 .values()
                 .dtype()
                 .to_storage()
@@ -605,10 +604,6 @@ pub fn array_to_pages<K: DictionaryKey>(
                     )
                 },
             };
-
-            if let Some(stats) = &mut statistics {
-                stats.null_count = Some(array.null_count() as i64)
-            }
 
             // write DataPages pointing to DictPage
             let data_pages = serialize_keys(array, type_, nested, statistics, options);
