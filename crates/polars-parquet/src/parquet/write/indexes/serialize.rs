@@ -71,7 +71,7 @@ pub fn serialize_offset_index(pages: &[PageWriteSpec]) -> ParquetResult<OffsetIn
 
 #[cfg(test)]
 mod tests {
-    use arrow::array::{Array, Float64Array, Int128Array, ListArray};
+    use arrow::array::{Array, Float64Array, ListArray};
     use arrow::bitmap::Bitmap;
     use arrow::datatypes::{ArrowDataType, Field};
 
@@ -166,14 +166,15 @@ mod tests {
     }
 
     #[test]
-    fn pages_without_statistics_have_no_column_index() {
-        // Int128 never writes min/max, so without null_count its pages have no statistics.
-        let statistics = StatisticsOptions {
-            null_count: false,
-            ..StatisticsOptions::full()
+    fn pages_without_min_max_have_no_column_index() {
+        let distinct_count_only = StatisticsOptions {
+            distinct_count: true,
+            ..StatisticsOptions::empty()
         };
-        let array = Int128Array::from([Some(1), None]).boxed();
-        let index = serialize_column_index(&page_specs(array, None, statistics)).unwrap();
-        assert!(index.is_none());
+        for statistics in [StatisticsOptions::empty(), distinct_count_only] {
+            let array = Float64Array::from([Some(1.0), None]).boxed();
+            let index = serialize_column_index(&page_specs(array, None, statistics)).unwrap();
+            assert!(index.is_none());
+        }
     }
 }
